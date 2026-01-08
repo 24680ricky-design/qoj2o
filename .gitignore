@@ -4,10 +4,18 @@ logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
+# Dependency directories
+node_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.local
+
+# Vite build output
 dist
 dist-ssr
 *.local
@@ -18,7 +26,7 @@ dist-ssr
 .idea
 .DS_Store
 *.suo
-*.ntvs*
+*.ntvs
 *.njsproj
 *.sln
 *.sw?
