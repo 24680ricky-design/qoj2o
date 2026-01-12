@@ -1,9 +1,25 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Collection, Settings, GameChar, ScaffoldingLevel } from '../types';
+import { Collection, Settings, GameChar, ScaffoldingLevel, ColorTheme, GameLog } from '../types';
 import { DraggableChar } from '../components/DraggableChar';
 import { DropZone } from '../components/DropZone';
 import { ImpulseOverlay } from '../components/ImpulseOverlay';
-import { speak } from '../services/speechService';
+import { RewardSystem } from '../components/RewardSystem';
+import { speak, playAudio, unlockAudio } from '../services/speechService';
+import { saveGameLog } from '../services/storageService';
+
+const COLOR_PALETTES: ColorTheme[] = [
+  { border: 'border-blue-400', bg: 'bg-blue-50', ring: 'ring-blue-200', charBg: 'bg-blue-200', charBorder: 'border-blue-400', charText: 'text-blue-900' },
+  { border: 'border-green-400', bg: 'bg-green-50', ring: 'ring-green-200', charBg: 'bg-green-200', charBorder: 'border-green-400', charText: 'text-green-900' },
+  { border: 'border-orange-400', bg: 'bg-orange-50', ring: 'ring-orange-200', charBg: 'bg-orange-200', charBorder: 'border-orange-400', charText: 'text-orange-900' },
+  { border: 'border-purple-400', bg: 'bg-purple-50', ring: 'ring-purple-200', charBg: 'bg-purple-200', charBorder: 'border-purple-400', charText: 'text-purple-900' },
+  { border: 'border-pink-400', bg: 'bg-pink-50', ring: 'ring-pink-200', charBg: 'bg-pink-200', charBorder: 'border-pink-400', charText: 'text-pink-900' },
+  { border: 'border-teal-400', bg: 'bg-teal-50', ring: 'ring-teal-200', charBg: 'bg-teal-200', charBorder: 'border-teal-400', charText: 'text-teal-900' },
+];
+
+const DISTRACTOR_THEME: ColorTheme = {
+  border: 'border-slate-300', bg: 'bg-slate-100', ring: 'ring-slate-200',
+  charBg: 'bg-yellow-400', charBorder: 'border-yellow-600', charText: 'text-slate-900' 
+};
 
 interface StudentViewProps {
   collection: Collection;
@@ -11,24 +27,31 @@ interface StudentViewProps {
   onExit: () => void;
 }
 
-// Visual Feedback State Type
 type FeedbackState = {
   type: 'success' | 'error';
   message: string;
 } | null;
 
 export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, onExit }) => {
-  // State
+  // Game State
   const [isImpulseLocked, setIsImpulseLocked] = useState(true);
   const [currentItemIndex, setCurrentItemIndex] = useState(0); 
-  
   const [filledZones, setFilledZones] = useState<Record<string, (string | null)[]>>({});
   const [scaffoldingLevel, setScaffoldingLevel] = useState<ScaffoldingLevel>(ScaffoldingLevel.NONE);
   const [completedItems, setCompletedItems] = useState<Set<string>>(new Set());
-  
-  // New State for Feedback and Game Over
   const [feedback, setFeedback] = useState<FeedbackState>(null);
   const [isGameComplete, setIsGameComplete] = useState(false);
+  const [guideVector, setGuideVector] = useState<{x: number, y: number} | undefined>(undefined);
+  const [gameSessionId, setGameSessionId] = useState(0);
+
+  // Token Economy State
+  const [stars, setStars] = useState(0);
+  const [showReward, setShowReward] = useState(false);
+
+  // Analytics State
+  const [startTime, setStartTime] = useState(Date.now());
+  const [mistakesCount, setMistakesCount] = useState(0);
+  const [maxScaffoldUsed, setMaxScaffoldUsed] = useState<ScaffoldingLevel>(ScaffoldingLevel.NONE);
 
   // Refs
   const scaffoldTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -48,8 +71,9 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
     return collection.items.find(item => !completedItems.has(item.id)) || null;
   }, [isMultiMode, collection.items, currentItemIndex, completedItems]);
 
-  // Initialization & Reset
+  // Initialization
   useEffect(() => {
+    unlockAudio();
     initGame();
   }, [collection]);
 
@@ -63,18 +87,36 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
     setCurrentItemIndex(0);
     setIsGameComplete(false);
     setFeedback(null);
+    setGameSessionId(prev => prev + 1);
+    setStars(0);
+    
+    // Reset Analytics
+    setStartTime(Date.now());
+    setMistakesCount(0);
+    setMaxScaffoldUsed(ScaffoldingLevel.NONE);
   };
 
   const handleRestart = () => {
+    unlockAudio();
     speak("重新開始");
     initGame();
-    // Force reset turn logic implies impulse lock will trigger via effect below
-    setIsImpulseLocked(true);
   };
 
-  // Generate Character Bank
+  const playItemAudio = (item: any, fallbackText: string) => {
+      if (item.audio) {
+          playAudio(item.audio).catch(() => speak(fallbackText));
+      } else {
+          speak(fallbackText);
+      }
+  };
+
   const charBank = useMemo(() => {
     let chars: GameChar[] = [];
+    const itemColorMap: Record<string, ColorTheme> = {};
+    collection.items.forEach((item, idx) => {
+      itemColorMap[item.id] = COLOR_PALETTES[idx % COLOR_PALETTES.length];
+    });
+
     visualItems.forEach(item => {
       const isItemCompleted = completedItems.has(item.id);
       if (!isItemCompleted) {
@@ -93,7 +135,8 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
       }
     });
 
-    if (settings.showDistractors) {
+    // Errorless Mode: Do not add distractors if enabled
+    if (settings.showDistractors && !settings.errorlessMode) {
        const otherNames = ['大', '小', '美', '阿', '華', '莉', '老', '師', '爸', '媽'];
        const count = isMultiMode ? 4 : 2;
        for(let i=0; i<count; i++) {
@@ -108,19 +151,44 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
        }
     }
     return chars.sort(() => Math.random() - 0.5);
-  }, [visualItems, settings.showDistractors, completedItems, filledZones]);
+  }, [visualItems, settings.showDistractors, settings.errorlessMode, completedItems, filledZones, collection.items]);
 
+  // Guide Vector Logic
+  useEffect(() => {
+    if (scaffoldingLevel === ScaffoldingLevel.GUIDE && focusItem) {
+      const filledState = filledZones[focusItem.id];
+      if (!filledState) return;
+      const firstEmptyIndex = filledState.findIndex(c => c === null);
+      if (firstEmptyIndex === -1) return;
+      const targetChar = charBank.find(c => c.belongsToItemId === focusItem.id && c.targetIndex === firstEmptyIndex);
+      
+      if (targetChar) {
+        const charEl = document.getElementById(`char-source-${targetChar.id}`);
+        const slotEl = document.getElementById(`drop-slot-${focusItem.id}-${firstEmptyIndex}`);
+        if (charEl && slotEl) {
+          const charRect = charEl.getBoundingClientRect();
+          const slotRect = slotEl.getBoundingClientRect();
+          const dx = (slotRect.left + slotRect.width / 2) - (charRect.left + charRect.width / 2);
+          const dy = (slotRect.top + slotRect.height / 2) - (charRect.top + charRect.height / 2);
+          setGuideVector({ x: dx, y: dy });
+        }
+      }
+    } else {
+      setGuideVector(undefined);
+    }
+  }, [scaffoldingLevel, focusItem, charBank, filledZones]);
 
-  // Game Lifecycle: Reset turn when focus item changes
+  // Turn Lifecycle
   useEffect(() => {
     if (!isGameComplete) {
-      resetTurn();
+      return resetTurn();
     }
-  }, [focusItem?.id, isMultiMode, isGameComplete]); 
+  }, [focusItem?.id, isMultiMode, isGameComplete, gameSessionId]);
 
   const resetTurn = () => {
     setIsImpulseLocked(true);
     setScaffoldingLevel(ScaffoldingLevel.NONE);
+    setGuideVector(undefined);
     if (scaffoldTimerRef.current) clearInterval(scaffoldTimerRef.current);
 
     const impulseTimer = setTimeout(() => {
@@ -139,20 +207,31 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
       secondsPassed += 1;
       
       if (secondsPassed === settings.delayFlash) {
-        setScaffoldingLevel(ScaffoldingLevel.VISUAL);
+        setScaffoldingLevel(prev => Math.max(prev, ScaffoldingLevel.VISUAL));
       }
       
       if (secondsPassed === settings.delayHint) {
-        setScaffoldingLevel(ScaffoldingLevel.AUDIO);
+        setScaffoldingLevel(prev => Math.max(prev, ScaffoldingLevel.AUDIO));
         if (focusItemRef.current) {
              const currentTarget = collection.items.find(i => i.id === focusItemRef.current);
-             if (currentTarget) speak(currentTarget.hint);
+             if (currentTarget) playItemAudio(currentTarget, currentTarget.hint);
         }
       }
 
       if (secondsPassed === settings.delayGuide) {
-        setScaffoldingLevel(ScaffoldingLevel.GUIDE);
+        setScaffoldingLevel(prev => Math.max(prev, ScaffoldingLevel.GUIDE));
       }
+      
+      // Track max scaffold level used for analytics
+      setMaxScaffoldUsed(prev => {
+          // Calculate the current level based on time
+          let currentLevel = ScaffoldingLevel.NONE;
+          if (secondsPassed >= settings.delayGuide) currentLevel = ScaffoldingLevel.GUIDE;
+          else if (secondsPassed >= settings.delayHint) currentLevel = ScaffoldingLevel.AUDIO;
+          else if (secondsPassed >= settings.delayFlash) currentLevel = ScaffoldingLevel.VISUAL;
+          return Math.max(prev, currentLevel);
+      });
+
     }, 1000);
   };
   
@@ -166,8 +245,6 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
       if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
     };
   }, []);
-
-  // --- Interaction Handlers ---
 
   const triggerFeedback = (type: 'success' | 'error', message: string) => {
     setFeedback({ type, message });
@@ -186,9 +263,17 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
       const draggedChar = charBank.find(c => c.id === charId);
 
       if (targetId && draggedChar) {
-        if (draggedChar.belongsToItemId === targetId) {
+        const isCorrect = draggedChar.belongsToItemId === targetId;
+
+        if (isCorrect) {
           handleSuccess(targetId, draggedChar);
         } else {
+          // Errorless Learning Check
+          if (settings.errorlessMode) {
+              // Just snap back, maybe play a small sound?
+              // For now, do nothing so it returns to original position
+              return; 
+          }
           handleFailure();
         }
       }
@@ -196,13 +281,12 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
   };
 
   const handleSuccess = (itemId: string, charObj: GameChar) => {
-    // 1. Audio Feedback
     speak(`答對了，這是${charObj.char}`); 
-    
-    // 2. Visual Feedback
     triggerFeedback('success', '⭕ 答對了！');
+    
+    // Add star
+    setStars(prev => prev + 1);
 
-    // 3. Logic Update
     setFilledZones(prev => {
       const currentItemState = [...(prev[itemId] || [])];
       if (charObj.targetIndex >= 0 && charObj.targetIndex < currentItemState.length) {
@@ -213,14 +297,13 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
 
     const targetItem = collection.items.find(i => i.id === itemId);
     if (targetItem) {
-      // Check for item completion shortly after state update
       setTimeout(() => {
         setFilledZones(currentZones => {
           const itemState = currentZones[itemId];
           if (itemState && itemState.every(c => c !== null)) {
              setCompletedItems(prev => {
                if (!prev.has(itemId)) {
-                 handleItemComplete(itemId, targetItem.name);
+                 handleItemComplete(itemId, targetItem);
                  return new Set(prev).add(itemId);
                }
                return prev;
@@ -233,33 +316,59 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
   };
   
   const handleFailure = () => {
+    setMistakesCount(prev => prev + 1);
     speak("不對喔，再試試看");
     triggerFeedback('error', '❌ 再試試看');
   };
 
-  const handleItemComplete = (itemId: string, itemName: string) => {
-      // Small delay to let the char sound finish
-      setTimeout(() => speak(`${itemName}，完成！`), 800);
+  const handleItemComplete = (itemId: string, item: any) => {
+      // Play custom audio if available
+      setTimeout(() => playItemAudio(item, `${item.name}，完成！`), 800);
       
-      if (isMultiMode) {
-        const allDone = collection.items.every(item => completedItems.has(item.id) || item.id === itemId);
-        if (allDone) {
-           setTimeout(finishGame, 1500);
-        }
-      } else {
-        setTimeout(() => {
-          if (currentItemIndex < collection.items.length - 1) {
-            setCurrentItemIndex(prev => prev + 1);
-          } else {
-            finishGame();
-          }
-        }, 2000);
+      // Check for rewards
+      const newStars = stars + 1; // +1 because state update hasn't rendered yet
+      if (newStars > 0 && newStars % settings.requiredStars === 0) {
+          setTimeout(() => setShowReward(true), 1500);
       }
+
+      const nextStep = () => {
+        if (isMultiMode) {
+            const allDone = collection.items.every(it => completedItems.has(it.id) || it.id === itemId);
+            if (allDone) {
+               setTimeout(finishGame, 1500);
+            }
+        } else {
+            setTimeout(() => {
+              if (currentItemIndex < collection.items.length - 1) {
+                setCurrentItemIndex(prev => prev + 1);
+              } else {
+                finishGame();
+              }
+            }, 2000);
+        }
+      };
+
+      // Delay slightly to let audio start
+      setTimeout(nextStep, 1000);
   };
 
   const finishGame = () => {
      setIsGameComplete(true);
      speak("太棒了，全部完成了！");
+     
+     // Save Analytics
+     const totalTime = (Date.now() - startTime) / 1000;
+     const log: GameLog = {
+         id: Date.now().toString(),
+         timestamp: Date.now(),
+         collectionName: collection.name,
+         totalItems: collection.items.length,
+         completedItems: collection.items.length,
+         mistakes: mistakesCount,
+         averageTimePerItem: totalTime / collection.items.length,
+         mostUsedScaffold: maxScaffoldUsed
+     };
+     saveGameLog(log);
   };
 
   const shouldGuideChar = (char: GameChar): boolean => {
@@ -272,11 +381,23 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
     return char.targetIndex === firstEmptyIndex;
   };
 
+  const getItemTheme = (itemId: string): ColorTheme => {
+    const idx = collection.items.findIndex(i => i.id === itemId);
+    if (idx === -1) return DISTRACTOR_THEME;
+    return COLOR_PALETTES[idx % COLOR_PALETTES.length];
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col relative overflow-hidden">
       <ImpulseOverlay isVisible={isImpulseLocked} />
+      
+      <RewardSystem 
+        currentStars={stars} 
+        totalRequired={settings.requiredStars} 
+        showReward={showReward} 
+        onRewardClose={() => setShowReward(false)} 
+      />
 
-      {/* Visual Feedback Overlay */}
       {feedback && (
         <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
           <div className={`
@@ -299,18 +420,12 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
                 onClick={handleRestart}
                 className="w-full py-4 bg-green-500 hover:bg-green-600 text-white rounded-2xl text-2xl font-bold shadow-lg transition-transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
                 再來一次
               </button>
               <button 
                 onClick={onExit}
                 className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl text-xl font-bold transition flex items-center justify-center gap-2"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                </svg>
                 退出練習
               </button>
             </div>
@@ -320,40 +435,43 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
 
       <header className="p-4 flex justify-between items-center bg-white shadow-sm z-10">
         <div className="flex gap-3">
-          <button onClick={onExit} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 transition flex items-center gap-1">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
+          <button onClick={onExit} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 transition">
             離開
           </button>
-          <button onClick={handleRestart} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl font-bold hover:bg-blue-100 transition flex items-center gap-1">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            再來一次
+          <button onClick={handleRestart} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl font-bold hover:bg-blue-100 transition">
+            重來
           </button>
         </div>
         
-        <div className="text-xl font-bold text-slate-600">
+        {scaffoldingLevel >= ScaffoldingLevel.AUDIO && focusItem && (
+          <button 
+            onClick={() => playItemAudio(focusItem, focusItem.hint)}
+            className="flex items-center gap-2 bg-yellow-100 text-yellow-700 px-4 py-2 rounded-full font-bold animate-pulse shadow-sm active:scale-95"
+          >
+             🔊 提示
+          </button>
+        )}
+
+        <div className="text-xl font-bold text-slate-600 mr-20"> {/* Margin for star counter */}
             {isMultiMode ? '配對挑戰' : `第 ${currentItemIndex + 1} / ${collection.items.length} 題`}
         </div>
       </header>
 
       <main className="flex-1 p-4 lg:p-8 flex flex-col lg:flex-row gap-8">
-        
-        {/* Drop Zones Container */}
         <div className={`flex-1 grid gap-8 ${isMultiMode ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3' : 'grid-cols-1 flex items-center justify-center'}`}>
-          {visualItems.map((item) => {
+          {visualItems.map((item, idx) => {
             const isCompleted = completedItems.has(item.id);
             const currentFilled = filledZones[item.id] || new Array(item.name.length).fill(null);
             const isFocusItem = focusItem?.id === item.id;
+            const theme = getItemTheme(item.id);
 
             return (
-              <div key={item.id} className={`bg-white p-4 rounded-[2rem] shadow-xl flex flex-col items-center justify-center gap-3 border-4 ${isCompleted ? 'border-green-400' : (isFocusItem ? 'border-blue-400 ring-4 ring-blue-100' : 'border-blue-100')}`}>
+              <div key={item.id} className={`bg-white p-4 rounded-[2rem] shadow-xl flex flex-col items-center justify-center gap-3 border-4 ${isCompleted ? 'border-green-400 opacity-60' : (isFocusItem ? `border-blue-300 ring-4 ${theme.ring}` : 'border-slate-100')}`}>
                 <img 
                   src={item.image} 
                   alt={item.name} 
-                  className={`w-40 h-40 lg:w-48 lg:h-48 object-cover rounded-3xl shadow-sm pointer-events-none select-none ${isImpulseLocked ? 'blur-md' : ''} transition-all duration-500`}
+                  onClick={() => playItemAudio(item, item.name)}
+                  className={`w-40 h-40 lg:w-48 lg:h-48 object-cover rounded-3xl shadow-sm cursor-pointer hover:opacity-90 active:scale-95 ${isImpulseLocked ? 'blur-md' : ''} transition-all duration-500`}
                 />
                 
                 <DropZone 
@@ -361,28 +479,35 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
                     expectedName={item.name}
                     filledChars={currentFilled}
                     isFlashing={isFocusItem && scaffoldingLevel >= ScaffoldingLevel.VISUAL && !isCompleted}
+                    theme={theme}
+                    ref={null}
                 />
               </div>
             );
           })}
         </div>
 
-        {/* Character Bank (Draggables) */}
         <div className="lg:w-1/4 min-h-[160px] bg-slate-200 rounded-[2rem] p-6 shadow-inner flex flex-wrap content-start gap-4 justify-center z-20">
-            {!isImpulseLocked && charBank.map((char) => (
-                <DraggableChar 
-                    key={char.id}
-                    char={char}
-                    onDrop={handleDrop}
-                    isMatched={false} 
-                    isGuideActive={shouldGuideChar(char)}
-                />
-            ))}
+            {!isImpulseLocked && charBank.map((char) => {
+                const isGuideActive = shouldGuideChar(char);
+                const theme = char.isDistractor ? DISTRACTOR_THEME : getItemTheme(char.belongsToItemId);
+                
+                return (
+                  <DraggableChar 
+                      key={char.id}
+                      char={char}
+                      onDrop={handleDrop}
+                      isMatched={false} 
+                      isGuideActive={isGuideActive}
+                      guideVector={isGuideActive ? guideVector : undefined}
+                      theme={theme}
+                  />
+                );
+            })}
             {charBank.length === 0 && !isGameComplete && (
                 <div className="text-slate-500 font-bold text-xl mt-10">完成！</div>
             )}
         </div>
-
       </main>
     </div>
   );

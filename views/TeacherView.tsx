@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Collection, Settings, Item } from '../types';
 import { ItemEditor } from '../components/ItemEditor';
-import { getCollections, saveCollections, getSettings, saveSettings, saveActiveCollectionId } from '../services/storageService';
+import { StatsBoard } from '../components/StatsBoard';
+import { getCollections, saveCollections, getSettings, saveSettings, saveActiveCollectionId, getGameLogs } from '../services/storageService';
 
 interface TeacherViewProps {
   onStartGame: (collection: Collection, settings: Settings) => void;
@@ -12,6 +13,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({ onStartGame }) => {
   const [activeCollectionId, setActiveCollectionId] = useState<string>('');
   const [settings, setSettings] = useState<Settings>(getSettings());
   const [isEditingSettings, setIsEditingSettings] = useState(false);
+  const [showStats, setShowStats] = useState(false);
 
   useEffect(() => {
     const loadedCollections = getCollections();
@@ -21,7 +23,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({ onStartGame }) => {
     }
   }, []);
 
-  // Save changes whenever collections or settings update
   useEffect(() => {
     if (collections.length > 0) {
         saveCollections(collections);
@@ -98,6 +99,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({ onStartGame }) => {
 
   return (
     <div className="min-h-screen bg-slate-100 p-4 lg:p-8 font-sans">
+      {showStats && (
+          <StatsBoard 
+             logs={getGameLogs()} 
+             onClose={() => setShowStats(false)} 
+             onRefresh={() => setShowStats(false)} 
+          />
+      )}
+
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* Left Sidebar: Collection List & Settings */}
@@ -138,6 +147,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({ onStartGame }) => {
                 ))}
               </ul>
             </div>
+            
+            <button 
+               onClick={() => setShowStats(true)}
+               className="w-full py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-sm font-bold transition mb-4"
+             >
+               📊 檢視學習數據
+             </button>
 
             <div className="border-t pt-4">
                <button 
@@ -181,6 +197,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({ onStartGame }) => {
                         className="w-full accent-purple-500"
                       />
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer bg-red-50 p-2 rounded-lg">
+                      <input type="checkbox" 
+                        checked={settings.errorlessMode}
+                        onChange={e => setSettings({...settings, errorlessMode: e.target.checked})}
+                        className="w-4 h-4 rounded text-red-500"
+                      />
+                      <span className="text-sm font-bold text-red-700">啟用無錯誤學習</span>
+                    </label>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" 
                         checked={settings.showDistractors}
@@ -196,6 +220,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({ onStartGame }) => {
                         className="w-4 h-4 rounded text-blue-500"
                       />
                       <span className="text-sm text-slate-700">多題同時顯示 (大螢幕)</span>
+                    </label>
+                    <label className="block text-sm">
+                      <span className="text-slate-600">集滿幾顆星獎勵: {settings.requiredStars}</span>
+                      <input type="number" min="1" max="20"
+                        value={settings.requiredStars}
+                        onChange={e => setSettings({...settings, requiredStars: Number(e.target.value)})}
+                        className="w-full p-1 border rounded"
+                      />
                     </label>
                  </div>
                )}

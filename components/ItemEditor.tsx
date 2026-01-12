@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Item } from '../types';
 import { fileToBase64, compressImage } from '../services/imageService';
+import { AudioRecorder } from './AudioRecorder';
 
 interface ItemEditorProps {
   item: Item;
@@ -68,13 +69,18 @@ export const ItemEditor: React.FC<ItemEditorProps> = ({ item, onUpdate, onDelete
             </button>
           </div>
           
-          <div className="flex gap-2 items-center">
+          <div className="flex flex-col gap-1">
             <input 
               type="text" 
               placeholder="提示語 (例如：戴著藍色眼鏡)" 
               value={item.hint}
               onChange={(e) => onUpdate({ ...item, hint: e.target.value })}
               className="flex-1 p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-xs select-text"
+            />
+            {/* Audio Recorder Integration */}
+            <AudioRecorder 
+              initialAudio={item.audio} 
+              onSave={(audio) => onUpdate({ ...item, audio })} 
             />
           </div>
         </div>

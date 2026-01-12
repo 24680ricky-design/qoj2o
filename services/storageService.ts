@@ -1,8 +1,9 @@
-import { Collection, Settings, DEFAULT_SETTINGS, Item } from '../types';
+import { Collection, Settings, DEFAULT_SETTINGS, Item, GameLog } from '../types';
 
 const STORAGE_KEY_COLLECTIONS = 'matching_king_collections';
 const STORAGE_KEY_SETTINGS = 'matching_king_settings';
 const STORAGE_KEY_ACTIVE_COLLECTION = 'matching_king_active_collection';
+const STORAGE_KEY_LOGS = 'matching_king_logs';
 
 const DEFAULT_COLLECTION: Collection = {
   id: 'default-class',
@@ -29,7 +30,7 @@ export const saveCollections = (collections: Collection[]) => {
     localStorage.setItem(STORAGE_KEY_COLLECTIONS, JSON.stringify(collections));
   } catch (e) {
     if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-      alert("儲存空間已滿！請嘗試刪除一些不必要的教材，或是減少照片數量。");
+      alert("儲存空間已滿！請嘗試刪除一些不必要的教材，或是減少照片/錄音數量。");
     }
     console.error("Save collections failed", e);
   }
@@ -58,4 +59,30 @@ export const getActiveCollectionId = (): string => {
 
 export const saveActiveCollectionId = (id: string) => {
   localStorage.setItem(STORAGE_KEY_ACTIVE_COLLECTION, id);
+};
+
+// --- Analytics Logs ---
+
+export const getGameLogs = (): GameLog[] => {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY_LOGS);
+    return data ? JSON.parse(data) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+export const saveGameLog = (log: GameLog) => {
+  try {
+    const currentLogs = getGameLogs();
+    // Keep only last 50 logs to save space
+    const newLogs = [log, ...currentLogs].slice(0, 50);
+    localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(newLogs));
+  } catch (e) {
+    console.error("Failed to save log", e);
+  }
+};
+
+export const clearGameLogs = () => {
+    localStorage.removeItem(STORAGE_KEY_LOGS);
 };
