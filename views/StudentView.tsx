@@ -256,27 +256,44 @@ export const StudentView: React.FC<StudentViewProps> = ({ collection, settings, 
 
   const handleDrop = (charId: string, x: number, y: number) => {
     const elements = document.elementsFromPoint(x, y);
-    const dropZone = elements.find(el => el.hasAttribute('data-item-id'));
+    const draggedChar = charBank.find(c => c.id === charId);
+    
+    if (!draggedChar) return;
 
-    if (dropZone) {
-      const targetId = dropZone.getAttribute('data-item-id');
-      const draggedChar = charBank.find(c => c.id === charId);
-
-      if (targetId && draggedChar) {
-        const isCorrect = draggedChar.belongsToItemId === targetId;
-
-        if (isCorrect) {
-          handleSuccess(targetId, draggedChar);
-        } else {
-          // Errorless Learning Check
-          if (settings.errorlessMode) {
-              // Just snap back, maybe play a small sound?
-              // For now, do nothing so it returns to original position
-              return; 
-          }
-          handleFailure();
+    if (settings.errorlessMode) {
+        // --- Errorless Mode: Area Detection (Permissive) ---
+        // Just checking if the user dropped inside the general item container
+        const dropZone = elements.find(el => el.hasAttribute('data-item-id'));
+        if (dropZone) {
+            const targetId = dropZone.getAttribute('data-item-id');
+            if (targetId && draggedChar.belongsToItemId === targetId) {
+                handleSuccess(targetId, draggedChar);
+            } else {
+                // In errorless mode, we silently ignore wrong drops or bounce back without "Error" feedback
+                return;
+            }
         }
-      }
+    } else {
+        // --- Normal Mode: Strict Slot Detection ---
+        // User must drop on the SPECIFIC character slot (e.g., Slot 1 for Character 1)
+        const slotEl = elements.find(el => el.hasAttribute('data-slot-index'));
+
+        if (slotEl) {
+            const slotIndex = parseInt(slotEl.getAttribute('data-slot-index') || '-1');
+            const targetId = slotEl.getAttribute('data-parent-item-id');
+
+            if (targetId && slotIndex !== -1) {
+                // Strict check: Item ID must match AND Slot Index must match
+                if (targetId === draggedChar.belongsToItemId && slotIndex === draggedChar.targetIndex) {
+                    handleSuccess(targetId, draggedChar);
+                } else {
+                    handleFailure();
+                }
+            }
+        } else {
+            // Dropped on background or outside -> Treat as invalid move (snap back)
+            // Can optionally add "Not here" feedback if they hit the card background but not the slot
+        }
     }
   };
 

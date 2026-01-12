@@ -15,7 +15,7 @@ export const DropZone = forwardRef<HTMLDivElement, DropZoneProps>(({ itemId, exp
   return (
     <div 
       ref={ref}
-      data-item-id={itemId}
+      data-item-id={itemId} // Kept for Errorless Mode (Area detection)
       className={`flex flex-wrap gap-2 justify-center items-center min-h-[6rem] lg:min-h-[8rem] p-3 rounded-2xl border-2 ${theme.border} ${theme.bg} transition-colors duration-300`}
     >
       {chars.map((char, index) => {
@@ -30,6 +30,9 @@ export const DropZone = forwardRef<HTMLDivElement, DropZoneProps>(({ itemId, exp
             key={index}
             // ID used for coordinate calculation for the guide hand
             id={`drop-slot-${itemId}-${index}`}
+            // Data attributes for Strict Mode hit testing
+            data-slot-index={index}
+            data-parent-item-id={itemId}
             className={`
               w-16 h-16 lg:w-20 lg:h-20
               flex items-center justify-center
